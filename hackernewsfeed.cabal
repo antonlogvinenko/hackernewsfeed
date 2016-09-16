@@ -23,3 +23,5 @@ executable hackernewsfeed
                      , wreq ==0.4.1.0
                      , lens ==4.14
                      , directory ==1.2.6.2
+                     , transformers ==0.5.2.0
+                     , MissingH ==1.4.0.1		     

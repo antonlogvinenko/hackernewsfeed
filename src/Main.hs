@@ -15,13 +15,32 @@ import Data.String
 import Data.Maybe (catMaybes)
 import Data.Ord (Down(..))
 import System.Directory
+import Control.Monad.Trans.Except
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+import Data.Either.Utils (maybeToEither)
+import Data.Bool (bool)
+import Control.Concurrent (threadDelay, forkIO)
+import Control.Monad (forever)
 
+data Failure = ListGet |
+               ListParse |
+               StoryGet { story :: Int } |
+               StoryParse { story :: Int } |
+               NoPublishedDB |
+               PublishedDBParse
+             deriving Show
 
 -- Identifiers
 type StoryIdentifiers = [Int]
 
-parseIdentifiers :: ByteString -> Maybe StoryIdentifiers
-parseIdentifiers = decode
+getTopIds :: ExceptT Failure IO StoryIdentifiers
+getTopIds = do
+  response <- liftIO $ get "https://hacker-news.firebaseio.com/v0/topstories.json"
+  let code = response ^. responseStatus ^. statusCode
+  if code == 200
+    then maybeToEither ListParse $ decode $ response ^. responseBody
+    else throwE ListGet
 
 
 -- Story
@@ -32,84 +51,76 @@ data Story = Story {
   url :: String
   } deriving Show
 
-parseStory :: ByteString -> Maybe Story
-parseStory = decode
-
-sortStories :: [Story] -> [Story]
-sortStories = sortOn (Down . score)
-
-formatStory :: Story -> String
-formatStory s = (title s) ++ " " ++ (url s)
-
-
-getTopStories :: IO (Maybe StoryIdentifiers)
-getTopStories = do
-  top <- get "https://hacker-news.firebaseio.com/v0/topstories.json"
-  return . parseIdentifiers $ top ^. responseBody
-
-parseStories :: [Maybe ByteString] -> [Story]
-parseStories = catMaybes . (map parseStory) . catMaybes
-
-getStoryUrl :: Int -> String
-getStoryUrl key = "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
-
-getStory :: Int -> IO (Maybe ByteString)
-getStory key = do
-  response <- get $ getStoryUrl key
-  let code = response ^. responseStatus ^. statusCode
-  return $ if code == 200
-    then Just $ response ^. responseBody
-    else Nothing
-
-
 instance FromJSON Story where
   parseJSON (Object v) =
     Story <$> v .: "id"
     <*> v .: "score"
     <*> v .: "title"
     <*> v .: "url"
+    
+formatStory :: Story -> String
+formatStory s = (title s) ++ " " ++ (url s)
 
 
-filterOutPublished :: StoryIdentifiers -> IO StoryIdentifiers
+storyUrl :: Int -> String
+storyUrl key = "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
+
+getStory :: Int -> ExceptT Failure IO Story
+getStory key = do
+  response <- liftIO $ get $ storyUrl key
+  let code = response ^. responseStatus ^. statusCode
+  if code == 200
+    then maybeToEither (StoryParse key) $ decode $ response ^. responseBody
+    else throwE (StoryGet key)
+
+
+
+filterOutPublished :: StoryIdentifiers -> ExceptT Failure IO StoryIdentifiers
 filterOutPublished ids = do
-  published <- decodeStrict <$> BS.readFile dbFileName
-  case published of
-    Nothing -> return ids
-    (Just publishedIds) -> return $ ids \\ publishedIds
+  published <- liftIO $ decodeStrict <$> BS.readFile dbFileName
+  maybeToEither PublishedDBParse $ fmap (ids \\) published
 
---access twitter
---schedule
-                     
+
 dbFileName = "./published.db"
 
-checkPublishedDBExists :: String -> IO ()
+checkPublishedDBExists :: String -> ExceptT Failure IO ()
 checkPublishedDBExists dbName = do
-  exists <- doesFileExist dbName
-  if exists
-    then return ()
-    else BSL.writeFile dbName ""
+  exists <- liftIO $ doesFileExist dbName
+  bool (throwE NoPublishedDB) (return ()) exists
 
-publishStory :: Story -> IO ()
-publishStory s = print s
+publishStory :: Story -> ExceptT Failure IO ()
+publishStory s = liftIO $ return ()
 
 
-rememberStory :: String -> Story -> IO ()
+rememberStory :: String -> Story -> ExceptT Failure IO ()
 rememberStory dbFileName story = do
-  publishedIds <- decodeStrict <$> BS.readFile dbFileName
+  publishedIds <- liftIO $ decodeStrict <$> BS.readFile dbFileName
   let newContents = take 1000 $ (key story) : maybe [] id publishedIds
-  BSL.writeFile dbFileName $ encode newContents
-      
+  liftIO $ BSL.writeFile dbFileName $ encode newContents
+
+
+getTopStory :: StoryIdentifiers -> ExceptT Failure IO Story
+getTopStory ids = do
+  filtered <- filterOutPublished ids
+  topStories <- mapM getStory $ take 10 filtered
+  return $ head $ sortOn (Down . score) $ topStories
+
+
+publishNews :: ExceptT Failure IO Story
+publishNews = do
+  checkPublishedDBExists dbFileName
+  topIds <- getTopIds
+  topStory <- getTopStory topIds
+  publishStory topStory
+  rememberStory dbFileName topStory
+  return topStory
+
 
 main :: IO ()
-main = do
-  checkPublishedDBExists dbFileName
-  mbCurrentTopIds <- getTopStories
-  case mbCurrentTopIds of
-    Nothing -> print "Out of luck!"
-    (Just currentTopIds) -> do
-      topIds <- filterOutPublished currentTopIds
-      topStoriesText <- mapM getStory $ take 10 topIds
-      let topStory = head $ sortStories $ parseStories topStoriesText
-      publishStory topStory
-      rememberStory dbFileName topStory
-  putStrLn "hello world"
+main = do 
+  print "Started..."
+  forever $ do
+    x <- runExceptT publishNews
+    print x
+    threadDelay $ 60 * 1000000
+
