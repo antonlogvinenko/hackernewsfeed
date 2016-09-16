@@ -114,8 +114,7 @@ tweet :: String -> Auth -> ExceptT Failure IO ()
 tweet text authCreds = do
   liftIO $ print text
   let cmd = "https://api.twitter.com/1.1/statuses/update.json"
-  let emptyBody = toJSON (Nothing :: Maybe String)
-  liftIO $ print authCreds
+      emptyBody = toJSON (Nothing :: Maybe String)
   response <- liftIO $ postWith
               ((defaults {Network.Wreq.Types.auth=Just authCreds}) & param "status".~ [T.pack text])
               cmd
