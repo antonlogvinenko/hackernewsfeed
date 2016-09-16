@@ -7,11 +7,9 @@ import Data.Aeson
 import Data.ByteString.Lazy (ByteString, readFile, writeFile)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString as BS
-import Text.RawString.QQ
 import Data.List (sortOn, (\\))
 import Control.Lens
 import Network.Wreq (get, getWith, postWith, defaults, responseBody, statusCode, responseStatus)
-import Data.String
 import Data.Maybe (catMaybes)
 import Data.Ord (Down(..))
 import System.Directory
