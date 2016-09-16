@@ -20,6 +20,8 @@ import Data.Either.Utils (maybeToEither)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
 import Network.Wreq.Types (auth, Auth(OAuth1))
+import Network.Wreq.Lens
+import qualified Data.Text as T
 
 import qualified Data.ByteString.Char8 as S8
 
@@ -111,11 +113,12 @@ getOAuthCreds path = do
 tweet :: String -> Auth -> ExceptT Failure IO ()
 tweet text authCreds = do
   liftIO $ print text
-  let cmd = "https://api.twitter.com/1.1/statuses/update.json?status="
+  let cmd = "https://api.twitter.com/1.1/statuses/update.json"
   let emptyBody = toJSON (Nothing :: Maybe String)
+  liftIO $ print authCreds
   response <- liftIO $ postWith
-              defaults {Network.Wreq.Types.auth=Just authCreds}
-              (cmd ++ text)
+              ((defaults {Network.Wreq.Types.auth=Just authCreds}) & param "status".~ [T.pack text])
+              cmd
               emptyBody
   let code = response ^. responseStatus ^. statusCode
   if code == 200
