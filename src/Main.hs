@@ -118,7 +118,6 @@ tweet text authCreds = do
               (cmd ++ text)
               emptyBody
   let code = response ^. responseStatus ^. statusCode
-  liftIO $ print response
   if code == 200
     then return ()
     else throwE TweetProblem
