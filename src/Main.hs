@@ -17,7 +17,6 @@ import Control.Monad.Trans.Except
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Data.Either.Utils (maybeToEither)
-import Data.Bool (bool)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
 import Network.Wreq.Types (auth, Auth(OAuth1))
@@ -89,7 +88,9 @@ dbFileName = "./published.db"
 checkPublishedDBExists :: String -> ExceptT Failure IO ()
 checkPublishedDBExists dbName = do
   exists <- liftIO $ doesFileExist dbName
-  bool (throwE NoPublishedDB) (return ()) exists
+  if exists
+    then return ()
+    else throwE NoPublishedDB
 
 
 rememberStory :: String -> Story -> ExceptT Failure IO ()
