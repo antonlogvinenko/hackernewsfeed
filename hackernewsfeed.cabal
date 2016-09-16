@@ -24,4 +24,5 @@ executable hackernewsfeed
                      , lens ==4.14
                      , directory ==1.2.6.2
                      , transformers ==0.5.2.0
-                     , MissingH ==1.4.0.1		     
+                     , MissingH ==1.4.0.1
+                     , twitter-conduit ==0.2.1

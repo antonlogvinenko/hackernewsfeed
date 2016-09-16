@@ -10,7 +10,7 @@ import qualified Data.ByteString as BS
 import Text.RawString.QQ
 import Data.List (sortOn, (\\))
 import Control.Lens
-import Network.Wreq
+import Network.Wreq (get, getWith, postWith, defaults, responseBody, statusCode, responseStatus)
 import Data.String
 import Data.Maybe (catMaybes)
 import Data.Ord (Down(..))
@@ -22,13 +22,18 @@ import Data.Either.Utils (maybeToEither)
 import Data.Bool (bool)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
+import Network.Wreq.Types (auth, Auth(OAuth1))
+
+import qualified Data.ByteString.Char8 as S8
 
 data Failure = ListGet |
                ListParse |
                StoryGet { story :: Int } |
                StoryParse { story :: Int } |
                NoPublishedDB |
-               PublishedDBParse
+               PublishedDBParse |
+               TweetProblem |
+               NoCreds
              deriving Show
 
 -- Identifiers
@@ -88,9 +93,6 @@ checkPublishedDBExists dbName = do
   exists <- liftIO $ doesFileExist dbName
   bool (throwE NoPublishedDB) (return ()) exists
 
-publishStory :: Story -> ExceptT Failure IO ()
-publishStory s = liftIO $ return ()
-
 
 rememberStory :: String -> Story -> ExceptT Failure IO ()
 rememberStory dbFileName story = do
@@ -98,6 +100,30 @@ rememberStory dbFileName story = do
   let newContents = take 1000 $ (key story) : maybe [] id publishedIds
   liftIO $ BSL.writeFile dbFileName $ encode newContents
 
+
+getOAuthCreds :: FilePath -> ExceptT Failure IO Auth
+getOAuthCreds path = do
+  c <- liftIO $ decodeStrict <$> BS.readFile path
+  let cred c n = S8.pack $ c !! n
+  case (c :: Maybe [String]) of
+    Nothing -> throwE NoCreds
+    (Just c) -> return $ OAuth1 (cred c 0) (cred c 1) (cred c 2) (cred c 3)
+
+tweet :: String -> Auth -> ExceptT Failure IO ()
+tweet text authCreds = do
+  liftIO $ print text
+  let cmd = "https://api.twitter.com/1.1/statuses/update.json?status="
+  let emptyBody = toJSON (Nothing :: Maybe String)
+  response <- liftIO $ postWith
+              defaults {Network.Wreq.Types.auth=Just authCreds}
+              (cmd ++ text)
+              emptyBody
+  let code = response ^. responseStatus ^. statusCode
+  liftIO $ print response
+  if code == 200
+    then return ()
+    else throwE TweetProblem
+         
 
 getTopStory :: StoryIdentifiers -> ExceptT Failure IO Story
 getTopStory ids = do
@@ -111,7 +137,8 @@ publishNews = do
   checkPublishedDBExists dbFileName
   topIds <- getTopIds
   topStory <- getTopStory topIds
-  publishStory topStory
+  oauth <- getOAuthCreds "./secret"
+  tweet (formatStory topStory) oauth
   rememberStory dbFileName topStory
   return topStory
 
