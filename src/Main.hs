@@ -19,7 +19,7 @@ import Control.Monad.Trans.Class
 import Data.Either.Utils (maybeToEither)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
-import Network.Wreq.Types (auth, Auth(OAuth1))
+import Network.Wreq.Types (auth, Auth(OAuth1), checkStatus, Options)
 import Network.Wreq.Lens (param)
 import qualified Data.Text as T
 
@@ -46,33 +46,38 @@ instance FromJSON Story where
     <*> v .: "title"
     <*> v .: "url"
 
-data Failure = ListGet |
+-- Handling errors
+data Failure = HttpError { failedCode :: Int, message :: String } |
                ListParse |
-               StoryGet { story :: Int } |
                StoryParse { story :: Int } |
                NoPublishedDB |
                PublishedDBParse |
-               TweetProblem |
                NoCreds
              deriving Show
 
+opts :: Options
+opts = (defaults {checkStatus = Just $ \_ _ _ -> Nothing})
+
+verify r msg = do
+  let code = r ^. responseStatus ^. statusCode
+  if code == 200
+     then return ()
+     else throwE $ HttpError code msg
 
 -- HN API
 getTopIds :: ExceptT Failure IO StoryIdentifiers
 getTopIds = do
-  response <- liftIO $ get "https://hacker-news.firebaseio.com/v0/topstories.json"
-  let code = response ^. responseStatus ^. statusCode
-  if code == 200
-    then maybeToEither ListParse $ decode $ response ^. responseBody
-    else throwE ListGet
+  let topUrl = "https://hacker-news.firebaseio.com/v0/topstories.json"
+  response <- liftIO $ getWith opts topUrl
+  verify response topUrl
+  maybeToEither ListParse $ decode $ response ^. responseBody
 
 getStory :: Int -> ExceptT Failure IO Story
 getStory key = do
-  response <- liftIO $ get $ "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
-  let code = response ^. responseStatus ^. statusCode
-  if code == 200
-    then maybeToEither (StoryParse key) $ decode $ response ^. responseBody
-    else throwE (StoryGet key)
+  let url = "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
+  response <- liftIO $ getWith opts url
+  verify response url
+  maybeToEither (StoryParse key) $ decode $ response ^. responseBody
 
 getTopStory :: StoryIdentifiers -> ExceptT Failure IO Story
 getTopStory ids = do
@@ -95,15 +100,11 @@ getOAuthCreds path = do
 
 tweet :: String -> Auth -> ExceptT Failure IO ()
 tweet text authCreds = do
-  liftIO $ print text
   response <- liftIO $ postWith
-              (defaults {auth = Just authCreds} & param "status".~ [T.pack text])
+              (opts {auth = Just authCreds} & param "status".~ [T.pack text])
               "https://api.twitter.com/1.1/statuses/update.json"
               emptyBody
-  let code = response ^. responseStatus ^. statusCode
-  if code == 200
-    then return ()
-    else throwE TweetProblem
+  verify response $ "Posting: " ++ text
 
 
 -- Published identifiers storage
@@ -143,6 +144,6 @@ main :: IO ()
 main = do 
   print "Started..."
   forever $ do
-    x <- runExceptT publishNews
-    print x
+    published <- runExceptT publishNews
+    print published
     threadDelay $ 60 * 1000000
