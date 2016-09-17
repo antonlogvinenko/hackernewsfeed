@@ -20,10 +20,31 @@ import Data.Either.Utils (maybeToEither)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
 import Network.Wreq.Types (auth, Auth(OAuth1))
-import Network.Wreq.Lens
+import Network.Wreq.Lens (param)
 import qualified Data.Text as T
 
 import qualified Data.ByteString.Char8 as S8
+
+
+-- Data types
+type StoryIdentifiers = [Int]
+
+data Story = Story {
+  key :: Int,
+  score :: Int,
+  title :: String,
+  url :: String
+  }
+
+instance Show Story where
+  show s = (title s) ++ " " ++ (url s)
+
+instance FromJSON Story where
+  parseJSON (Object v) =
+    Story <$> v .: "id"
+    <*> v .: "score"
+    <*> v .: "title"
+    <*> v .: "url"
 
 data Failure = ListGet |
                ListParse |
@@ -35,9 +56,8 @@ data Failure = ListGet |
                NoCreds
              deriving Show
 
--- Identifiers
-type StoryIdentifiers = [Int]
 
+-- HN API
 getTopIds :: ExceptT Failure IO StoryIdentifiers
 getTopIds = do
   response <- liftIO $ get "https://hacker-news.firebaseio.com/v0/topstories.json"
@@ -46,61 +66,24 @@ getTopIds = do
     then maybeToEither ListParse $ decode $ response ^. responseBody
     else throwE ListGet
 
-
--- Story
-data Story = Story {
-  key :: Int,
-  score :: Int,
-  title :: String,
-  url :: String
-  } deriving Show
-
-instance FromJSON Story where
-  parseJSON (Object v) =
-    Story <$> v .: "id"
-    <*> v .: "score"
-    <*> v .: "title"
-    <*> v .: "url"
-    
-formatStory :: Story -> String
-formatStory s = (title s) ++ " " ++ (url s)
-
-
-storyUrl :: Int -> String
-storyUrl key = "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
-
 getStory :: Int -> ExceptT Failure IO Story
 getStory key = do
-  response <- liftIO $ get $ storyUrl key
+  response <- liftIO $ get $ "https://hacker-news.firebaseio.com/v0/item/" ++ (show key) ++ ".json"
   let code = response ^. responseStatus ^. statusCode
   if code == 200
     then maybeToEither (StoryParse key) $ decode $ response ^. responseBody
     else throwE (StoryGet key)
 
+getTopStory :: StoryIdentifiers -> ExceptT Failure IO Story
+getTopStory ids = do
+  filtered <- filterOutPublished ids
+  topStories <- mapM getStory $ take 10 filtered
+  return $ head $ sortOn (Down . score) $ topStories
 
 
-filterOutPublished :: StoryIdentifiers -> ExceptT Failure IO StoryIdentifiers
-filterOutPublished ids = do
-  published <- liftIO $ decodeStrict <$> BS.readFile dbFileName
-  maybeToEither PublishedDBParse $ fmap (ids \\) published
-
-
-dbFileName = "./published.db"
-
-checkPublishedDBExists :: String -> ExceptT Failure IO ()
-checkPublishedDBExists dbName = do
-  exists <- liftIO $ doesFileExist dbName
-  if exists
-    then return ()
-    else throwE NoPublishedDB
-
-
-rememberStory :: String -> Story -> ExceptT Failure IO ()
-rememberStory dbFileName story = do
-  publishedIds <- liftIO $ decodeStrict <$> BS.readFile dbFileName
-  let newContents = take 1000 $ (key story) : maybe [] id publishedIds
-  liftIO $ BSL.writeFile dbFileName $ encode newContents
-
+-- Twitter API
+secretPath = "./secret"
+emptyBody = toJSON (Nothing :: Maybe String)
 
 getOAuthCreds :: FilePath -> ExceptT Failure IO Auth
 getOAuthCreds path = do
@@ -113,35 +96,48 @@ getOAuthCreds path = do
 tweet :: String -> Auth -> ExceptT Failure IO ()
 tweet text authCreds = do
   liftIO $ print text
-  let cmd = "https://api.twitter.com/1.1/statuses/update.json"
-      emptyBody = toJSON (Nothing :: Maybe String)
   response <- liftIO $ postWith
-              ((defaults {Network.Wreq.Types.auth=Just authCreds}) & param "status".~ [T.pack text])
-              cmd
+              (defaults {auth = Just authCreds} & param "status".~ [T.pack text])
+              "https://api.twitter.com/1.1/statuses/update.json"
               emptyBody
   let code = response ^. responseStatus ^. statusCode
   if code == 200
     then return ()
     else throwE TweetProblem
-         
-
-getTopStory :: StoryIdentifiers -> ExceptT Failure IO Story
-getTopStory ids = do
-  filtered <- filterOutPublished ids
-  topStories <- mapM getStory $ take 10 filtered
-  return $ head $ sortOn (Down . score) $ topStories
 
 
+-- Published identifiers storage
+dbFileName = "./published.db"
+
+checkPublishedDBExists :: String -> ExceptT Failure IO ()
+checkPublishedDBExists dbName = do
+  exists <- liftIO $ doesFileExist dbName
+  if exists
+    then return ()
+    else throwE NoPublishedDB
+
+filterOutPublished :: StoryIdentifiers -> ExceptT Failure IO StoryIdentifiers
+filterOutPublished ids = do
+  published <- liftIO $ decodeStrict <$> BS.readFile dbFileName
+  maybeToEither PublishedDBParse $ fmap (ids \\) published
+
+rememberStory :: String -> Story -> ExceptT Failure IO ()
+rememberStory dbFileName story = do
+  publishedIds <- liftIO $ decodeStrict <$> BS.readFile dbFileName
+  let newContents = take 1000 $ (key story) : maybe [] id publishedIds
+  liftIO $ BSL.writeFile dbFileName $ encode newContents
+
+
+-- Main code
 publishNews :: ExceptT Failure IO Story
 publishNews = do
   checkPublishedDBExists dbFileName
   topIds <- getTopIds
   topStory <- getTopStory topIds
-  oauth <- getOAuthCreds "./secret"
-  tweet (formatStory topStory) oauth
+  oauth <- getOAuthCreds secretPath
+  tweet (show topStory) oauth
   rememberStory dbFileName topStory
   return topStory
-
 
 main :: IO ()
 main = do 
@@ -150,4 +146,3 @@ main = do
     x <- runExceptT publishNews
     print x
     threadDelay $ 60 * 1000000
-
