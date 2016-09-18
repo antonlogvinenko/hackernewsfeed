@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
 
 module Main where
 
@@ -22,6 +21,7 @@ import Control.Monad (forever)
 import Network.Wreq.Types (auth, Auth(OAuth1), checkStatus, Options)
 import Network.Wreq.Lens (param)
 import qualified Data.Text as T
+import Control.Exception
 
 import qualified Data.ByteString.Char8 as S8
 
@@ -60,9 +60,7 @@ opts = (defaults {checkStatus = Just $ \_ _ _ -> Nothing})
 
 verify r msg = do
   let code = r ^. responseStatus ^. statusCode
-  if code == 200
-     then return ()
-     else throwE $ HttpError code msg
+  if code == 200 then return () else throwE $ HttpError code msg
 
 -- HN API
 getTopIds :: ExceptT Failure IO StoryIdentifiers
@@ -113,9 +111,7 @@ dbFileName = "./published.db"
 checkPublishedDBExists :: String -> ExceptT Failure IO ()
 checkPublishedDBExists dbName = do
   exists <- liftIO $ doesFileExist dbName
-  if exists
-    then return ()
-    else throwE NoPublishedDB
+  if exists then return () else throwE NoPublishedDB
 
 filterOutPublished :: StoryIdentifiers -> ExceptT Failure IO StoryIdentifiers
 filterOutPublished ids = do
@@ -144,6 +140,7 @@ main :: IO ()
 main = do 
   print "Started..."
   forever $ do
-    published <- runExceptT publishNews
-    print published
+    catch (runExceptT publishNews >>= print) (print :: SomeException -> IO ())
     threadDelay $ 60 * 1000000
+                                             
+            
