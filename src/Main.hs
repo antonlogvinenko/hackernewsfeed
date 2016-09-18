@@ -141,6 +141,4 @@ main = do
   print "Started..."
   forever $ do
     catch (runExceptT publishNews >>= print) (print :: SomeException -> IO ())
-    threadDelay $ 60 * 1000000
-                                             
-            
+    threadDelay $ 60 * 60 * 1000000
