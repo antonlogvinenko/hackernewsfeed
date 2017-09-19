@@ -18,7 +18,7 @@ import Control.Monad.Trans.Class
 import Data.Either.Utils (maybeToEither)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (forever)
-import Network.Wreq.Types (auth, Auth(OAuth1), checkStatus, Options)
+import Network.Wreq.Types (auth, Auth(OAuth1), checkResponse, Options)
 import Network.Wreq.Lens (param)
 import qualified Data.Text as T
 import Control.Exception
@@ -47,20 +47,20 @@ instance FromJSON Story where
     <*> v .: "url"
 
 -- Handling errors
-data Failure = HttpError { failedCode :: Int, message :: String } |
-               ListParse |
-               StoryParse { story :: Int } |
-               NoPublishedDB |
-               PublishedDBParse |
-               NoCreds
+data Failure = HttpError { failedCode :: Int, message :: String }
+               | ListParse
+               | StoryParse { story :: Int }
+               | NoPublishedDB
+               | PublishedDBParse
+               | NoCreds
              deriving Show
 
 opts :: Options
-opts = (defaults {checkStatus = Just $ \_ _ _ -> Nothing})
+opts = defaults {checkResponse = Just $ \_ _ -> return ()}
 
-verify r msg = do
+verify r msg =
   let code = r ^. responseStatus ^. statusCode
-  if code == 200 then return () else throwE $ HttpError code msg
+  in if code == 200 then return () else throwE $ HttpError code msg
 
 -- HN API
 getTopIds :: ExceptT Failure IO StoryIdentifiers
